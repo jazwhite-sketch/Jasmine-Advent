@@ -69,6 +69,15 @@ h1 em{color:var(--gold);font-weight:400}
 .door-today:hover{box-shadow:0 6px 0 var(--door-edge),0 0 0 2px var(--cream),0 0 0 4px var(--red)}
 .lock{display:inline-block;width:8px;height:7px;border:1px solid currentColor;border-radius:2px;position:relative;margin:4px 1px 0}
 .lock::before{content:"";position:absolute;width:4px;height:5px;border:1px solid currentColor;border-bottom:0;border-radius:3px 3px 0 0;left:1px;bottom:5px}
+.preview-bar{display:flex;justify-content:space-between;align-items:center;gap:10px 16px;flex-wrap:wrap;margin-bottom:16px;padding:10px 13px;border:1px solid #b99763;border-radius:10px;background:#f7deb2;color:var(--deep)}
+.preview-bar p{margin:0}
+.preview-button{border:1px solid var(--green);border-radius:8px;padding:.5rem .75rem;background:var(--green);color:var(--cream);font-weight:700;cursor:pointer}
+.preview-button:hover{background:#285748}
+.preview-form{display:grid;gap:12px}
+.preview-form label{display:grid;gap:6px;font-weight:700}
+.preview-form input{width:100%;padding:.6rem .75rem;border:1px solid #9c8570;border-radius:8px;background:white;color:var(--ink);font:inherit}
+.preview-form .preview-button{justify-self:start}
+.preview-error{color:#8c2937;font-weight:650}
 footer{padding:19px 0 29px;margin-top:17px;border-top:1px solid var(--line);color:var(--muted);font:italic 1rem var(--display);text-align:center}
 footer span{color:var(--red);font-style:normal;margin-inline:.3rem}
 dialog{background:var(--cream);color:var(--ink);border:1px solid #fff7ec;border-radius:22px;width:min(540px,calc(100% - 26px));max-height:calc(100dvh - 30px);padding:0;overflow:auto;box-shadow:0 22px 85px #122b2580}
@@ -158,11 +167,31 @@ body:has(dialog[open]){overflow:hidden}
       <div><h2 id="calendar-title">Deine Türchen</h2><p id="calendar-date"></p></div>
       <span class="progress" id="progress" role="status">0 / 24 geöffnet</span>
     </div>
+    <div class="preview-bar" id="preview-bar" hidden>
+      <p><strong>Vorschau aktiv</strong> · Alle Türchen sind testbar.</p>
+      <button type="button" class="preview-button" id="end-preview">Vorschau beenden</button>
+    </div>
     <div id="doors" class="grid"></div>
     <noscript>Aktiviere JavaScript, um die Türchen zu öffnen.</noscript>
   </section>
 </main>
 <footer class="wrap"><span aria-hidden="true">✦</span> Für dich, von Jasper. <span aria-hidden="true">✦</span></footer>
+
+<dialog id="preview-dialog" aria-labelledby="preview-title">
+  <div class="dialog-head">
+    <h2 id="preview-title">Kalendervorschau</h2>
+    <button type="button" class="close" aria-label="Vorschaufenster schließen">×</button>
+  </div>
+  <div class="inside">
+    <form id="preview-form" class="preview-form">
+      <label>Vorschau-Passwort
+        <input id="preview-password" type="password" autocomplete="off" required autofocus>
+      </label>
+      <p class="preview-error" id="preview-error" role="alert" hidden></p>
+      <button class="preview-button" type="submit">Vorschau starten</button>
+    </form>
+  </div>
+</dialog>
 
 <dialog id="day-dialog" aria-labelledby="day-title">
   <div class="dialog-head">
@@ -196,6 +225,10 @@ body:has(dialog[open]){overflow:hidden}
 // Kalenderjahr und Zeitzone. Neue Tage öffnen um Mitternacht in Deutschland.
 const YEAR = 2026;
 const TIME_ZONE = "Europe/Berlin";
+
+// Lokale Vorschau für die statische Seite. Hier steht nur der SHA-256-Hash.
+const PREVIEW_HASH = "#vorschau";
+const PREVIEW_PASSWORD_SHA256 = "c8c6c6d73fd0b6d403df558fd2bfe9520e45acc1510300afaed6f0b2e19a67ae";
 
 // Bilder neben dieser Datei ablegen, z. B. fotos/01.jpg bis fotos/24.jpg.
 // Bei Bedarf hier zentral Ordner oder Dateiendung ändern.
@@ -256,6 +289,7 @@ const jump = $("jump");
 const photo = $("photo");
 const doors = [];
 let activeDay = null;
+let previewActive = false;
 let currentDate;
 let opened = new Set();
 try {
@@ -279,9 +313,9 @@ function renderCalendar() {
   let todaysDoor = null;
   for (const { day, button, state } of doors) {
     const date = dateFor(day);
-    const available = currentDate >= date;
-    const isToday = currentDate === date;
-    const seen = opened.has(day);
+    const available = previewActive || currentDate >= date;
+    const isToday = !previewActive && currentDate === date;
+    const seen = !previewActive && opened.has(day);
     if (isToday) todaysDoor = day;
     button.classList.toggle("door-today", isToday);
     if (isToday) button.setAttribute("aria-current", "date");
@@ -297,9 +331,12 @@ function renderCalendar() {
     state.append(label);
     button.setAttribute("aria-label", day + ". Dezember. " + label);
   }
+  $("preview-bar").hidden = !previewActive;
+  $("progress").hidden = previewActive;
   $("progress").textContent = opened.size + " / 24 geöffnet";
   $("jump-label").textContent = todaysDoor ? "Heutiges Türchen öffnen" : "Zu den Türchen";
   jump.dataset.day = todaysDoor || "";
+  $("calendar-date").hidden = previewActive;
   $("calendar-date").textContent = currentDate < dateFor(1)
     ? "Das erste Türchen öffnet am 1. Dezember."
     : todaysDoor
@@ -310,7 +347,7 @@ function renderCalendar() {
 function renderBonus(day) {
   const bonus = $("bonus");
   const deal = BONUS_DEALS[day];
-  const date = today();
+  const date = previewActive ? dateFor(day) : today();
   bonus.replaceChildren();
   bonus.hidden = true;
   if (!deal || (deal.validFrom && date < deal.validFrom) || (deal.validUntil && date > deal.validUntil)) return;
@@ -368,7 +405,7 @@ function loadPhoto(day) {
 
 function openDoor(day) {
   activeDay = day;
-  const available = isAvailable(day);
+  const available = previewActive || isAvailable(day);
   $("day-label").textContent = "Türchen " + padded(day);
   $("day-title").textContent = day + ". Dezember";
   $("lock-message").hidden = available;
@@ -380,8 +417,10 @@ function openDoor(day) {
     $("gift-title").textContent = giftTitle;
     $("gift-text").textContent = giftText;
     renderBonus(day);
-    opened.add(day);
-    try { localStorage.setItem(storageKey, JSON.stringify([...opened])); } catch {}
+    if (!previewActive) {
+      opened.add(day);
+      try { localStorage.setItem(storageKey, JSON.stringify([...opened])); } catch {}
+    }
     loadPhoto(day);
   } else {
     $("lock-message").textContent = "Dieses Türchen öffnet am " + day + ". Dezember um Mitternacht deutscher Zeit.";
@@ -436,12 +475,76 @@ function refreshDate() {
   if (today() === currentDate) return;
   const previouslyLocked = activeDay && currentDate < dateFor(activeDay);
   renderCalendar();
+  if (previewActive) return;
   if (dialog.open && previouslyLocked && isAvailable(activeDay)) openDoor(activeDay);
   else if (dialog.open && activeDay && isAvailable(activeDay)) renderBonus(activeDay);
 }
 setInterval(refreshDate, 1000);
 document.addEventListener("visibilitychange", refreshDate);
 window.addEventListener("pageshow", refreshDate);
+
+const previewDialog = $("preview-dialog");
+const previewForm = $("preview-form");
+const previewInput = $("preview-password");
+const previewError = $("preview-error");
+const previewSubmit = previewForm.querySelector('button[type="submit"]');
+
+function openPreviewPrompt() {
+  if (location.hash !== PREVIEW_HASH) return;
+  if (previewActive) {
+    history.replaceState(history.state, "", location.pathname + location.search);
+    return;
+  }
+  if (dialog.open) dialog.close();
+  if (!previewDialog.open) previewDialog.showModal();
+}
+
+previewDialog.querySelector(".close").addEventListener("click", () => previewDialog.close());
+previewDialog.addEventListener("close", () => {
+  previewForm.reset();
+  previewError.hidden = true;
+  if (location.hash === PREVIEW_HASH) {
+    history.replaceState(history.state, "", location.pathname + location.search);
+  }
+});
+
+previewInput.addEventListener("input", () => { previewError.hidden = true; });
+previewForm.addEventListener("submit", async event => {
+  event.preventDefault();
+  if (previewSubmit.disabled) return;
+  previewSubmit.disabled = true;
+  try {
+    const entered = new TextEncoder().encode(previewInput.value);
+    const digest = await crypto.subtle.digest("SHA-256", entered);
+    const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    if (!previewDialog.open) return;
+    if (hash !== PREVIEW_PASSWORD_SHA256) {
+      previewError.textContent = "Das Vorschau-Passwort stimmt nicht.";
+      previewError.hidden = false;
+      previewInput.select();
+      return;
+    }
+    previewActive = true;
+    previewDialog.close();
+    renderCalendar();
+    $("end-preview").focus();
+  } catch {
+    if (previewDialog.open) {
+      previewError.textContent = "Die Passwortprüfung ist hier nicht verfügbar. Öffne den Kalender über HTTPS.";
+      previewError.hidden = false;
+    }
+  } finally {
+    previewSubmit.disabled = false;
+  }
+});
+
+$("end-preview").addEventListener("click", () => {
+  previewActive = false;
+  renderCalendar();
+  jump.focus();
+});
+window.addEventListener("hashchange", openPreviewPrompt);
+openPreviewPrompt();
 </script>
 </body>
 </html>
